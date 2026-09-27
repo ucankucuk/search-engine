@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+# rule_files: the alert rules themselves (see rules.yml) — Prometheus
+# evaluates this file on every evaluation_interval (10s).
+rule_files:
+  - "/etc/prometheus/rules.yml"
+
+# alerting: once a rule crosses its threshold and starts "firing",
+# Prometheus learns WHICH Alertmanager to send it to here. Prometheus
+# itself NEVER sends notifications (Slack/email/etc.) — it only forwards
+# "which alerts are currently active" to Alertmanager; grouping,
+# deduplication, silencing, and the actual notification are Alertmanager's job.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: "search-engine-api"
+    static_configs:
+      - targets: ["app:8080"]
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

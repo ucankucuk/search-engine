@@ -1,0 +1,104 @@
+# Prometheus alerting rules. This file embodies the difference between
+# "someone watching a dashboard" and "someone getting notified" — the
+# Grafana dashboards (Provider Health, System Health) make the state
+# VISIBLE, but it goes unnoticed if nobody's looking; the rules here have
+# Prometheus itself CONTINUOUSLY evaluate the state and send a signal to
+# Alertmanager (see the alertmanager service in docker-compose.yml) once a
+# threshold is crossed.
+#
+# The "for:" duration is DELIBERATE on every rule: a metric crossing a
+# threshold for a single instant isn't enough to alert on (it produces
+# noise/false positives) — it needs to stay in that state for a certain
+# duration. The durations were chosen to match the timescale of the
+# relevant mechanism itself (the breaker's Timeout, the ingestion cadence);
+# they aren't arbitrary.
+groups:
+  - name: search-engine-alerts
+    rules:
+      # ---------------------------------------------------------------
+      # Circuit breaker
+      # ---------------------------------------------------------------
+      - alert: ProviderCircuitBreakerOpen
+        expr: provider_circuit_state == 2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Provider circuit breaker open: {{ $labels.provider }}"
+          description: >-
+            The circuit breaker for the {{ $labels.provider }} provider has
+            been OPEN for at least 1 minute — content cannot be fetched
+            from this provider. Check the health of the provider itself
+            (network, upstream service).
+
+      # ---------------------------------------------------------------
+      # Search latency
+      # ---------------------------------------------------------------
+      - alert: HighSearchLatency
+        expr: histogram_quantile(0.95, rate(search_request_duration_seconds_bucket[5m])) > 1.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency on the /search endpoint (p95)"
+          description: >-
+            The p95 latency of requests over the last 5 minutes exceeds
+            1.5 seconds, and this has been the case for at least 2
+            minutes. Check Elasticsearch's load and candidateWindowSize
+            (see the elastic package).
+
+      # ---------------------------------------------------------------
+      # Service availability
+      # ---------------------------------------------------------------
+      - alert: SearchEngineAPIDown
+        expr: up{job="search-engine-api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "search-engine-api is not responding to Prometheus"
+          description: >-
+            Prometheus has been unable to scrape app:8080/metrics for at
+            least 30 seconds — the API is either fully down or has lost
+            network connectivity. Check with "docker compose ps app" and
+            "docker logs search-engine-app".
+
+      # ---------------------------------------------------------------
+      # Provider failure rate (an EARLY warning, before the breaker opens)
+      # ---------------------------------------------------------------
+      - alert: HighProviderFailureRate
+        expr: >-
+          (
+            sum by (provider) (rate(provider_requests_total{status="failure"}[5m]))
+            /
+            sum by (provider) (rate(provider_requests_total[5m]))
+          ) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High failure rate for {{ $labels.provider }} (breaker may not have opened yet)"
+          description: >-
+            {{ $labels.provider }} has failed on more than 50% of its
+            requests over the last 5 minutes. NOTE: this does not fire
+            automatically in no-traffic situations like "0 requests / 0
+            requests", since that is UNDEFINED (NaN) — it is only
+            meaningful while there is REAL traffic.
+
+      # ---------------------------------------------------------------
+      # Mongo<->ES consistency backlog (see content_pending_indexing,
+      # Reconcile in internal/ingestion/job.go)
+      # ---------------------------------------------------------------
+      - alert: ContentIndexingBacklog
+        expr: content_pending_indexing > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A backlog of records is waiting to be indexed into Elasticsearch"
+          description: >-
+            There have been records sitting as indexed=false in Mongo for
+            at least 2 minutes AND that count isn't dropping to zero —
+            this usually means Elasticsearch is down, or reconcile itself
+            is failing (look for "reconcile: re-indexing failed" in the
+            app logs). Check with "docker compose ps elasticsearch".

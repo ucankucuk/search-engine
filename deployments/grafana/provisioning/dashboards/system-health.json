@@ -1,0 +1,110 @@
+{
+  "id": null,
+  "uid": "system-health",
+  "title": "System Health",
+  "description": "The Go application's own runtime metrics: heap/memory usage, goroutine count, CPU usage. (Container-level cAdvisor metrics were left out of scope, since they don't run reliably on Docker Desktop.)",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "timezone": "browser",
+  "tags": ["search-engine", "system-health"],
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Go Application (app)** — runtime metrics provided automatically by the Prometheus client library, with no code changes needed."
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Go Application — Heap (Memory) Usage",
+      "description": "go_memstats_alloc_bytes: heap memory currently in active use. go_memstats_heap_inuse_bytes: heap space the Go runtime has taken from the OS and is holding onto (not yet returned to the OS) — the gap between the two shows how much 'idle' space the GC is holding.",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 3 },
+      "targets": [
+        {
+          "expr": "go_memstats_alloc_bytes{job=\"search-engine-api\"}",
+          "legendFormat": "In use (alloc)",
+          "refId": "A"
+        },
+        {
+          "expr": "go_memstats_heap_inuse_bytes{job=\"search-engine-api\"}",
+          "legendFormat": "Heap (in-use)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Go Application — Goroutine Count",
+      "description": "go_goroutines: the number of goroutines currently running. A steadily, continuously climbing line is a sign of a 'goroutine leak' (goroutines started somewhere never finish) — it's expected to fluctuate within a stable band.",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 3 },
+      "targets": [
+        {
+          "expr": "go_goroutines{job=\"search-engine-api\"}",
+          "legendFormat": "goroutine",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Go Application — CPU Usage",
+      "description": "From the process_cpu_seconds_total counter: the CPU time used by the application, as a percentage of one core (100% = fully saturating 1 core).",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 11 },
+      "targets": [
+        {
+          "expr": "rate(process_cpu_seconds_total{job=\"search-engine-api\"}[1m])",
+          "legendFormat": "app CPU",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    }
+  ]
+}

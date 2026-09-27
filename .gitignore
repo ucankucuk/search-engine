@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# Secrets / local environment
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Go (backend)
+# ---------------------------------------------------------------------------
+# Compiled binaries
+/search-engine
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Go build/test cache if ever created inside the repo
+go.work
+go.work.sum
+
+# ---------------------------------------------------------------------------
+# Node / frontend (React + Vite)
+# ---------------------------------------------------------------------------
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Docker / Compose runtime data
+# ---------------------------------------------------------------------------
+# Named volumes are managed by Docker itself and never live in the repo,
+# but in case anything gets bind-mounted locally during testing:
+mongo-data/
+es-data/
+prometheus-data/
+grafana-data/
+loki-data/
+
+# ---------------------------------------------------------------------------
+# IDE / editor
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Logs / temp files
+# ---------------------------------------------------------------------------
+*.log
+tmp/
+*.tmp

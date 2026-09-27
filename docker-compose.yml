@@ -1,0 +1,290 @@
+# The startup order is deliberately layered:
+#   1) Databases (mongo, elasticsearch) — nothing that depends on them
+#      starts until their healthchecks PASS.
+#   2) Application (app) — starts only once both of the above are
+#      "healthy".
+#   3) Observability tools (prometheus, grafana, loki, promtail) — start
+#      after app is "healthy", because the /metrics endpoint prometheus
+#      will scrape needs to already be up by then.
+#
+# "depends_on: condition: service_healthy" guarantees this — a plain
+# depends_on only guarantees the container has STARTED, not that the
+# service INSIDE it is READY to accept requests. Without the healthcheck,
+# this ordering would be an illusion.
+
+networks:
+  search-engine-net:
+    driver: bridge
+
+volumes:
+  mongo_data:
+  es_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+
+services:
+  # ---------------------------------------------------------------------
+  # 1) DATABASES
+  # ---------------------------------------------------------------------
+  mongo:
+    image: mongo:7
+    container_name: search-engine-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks: [search-engine-net]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # mongo-express: a lightweight web UI for browsing and inspecting
+  # Mongo's records from the browser. It depends only on the "mongo"
+  # service — app doesn't need to be up — and is handy for seeing
+  # directly what actually got written to Mongo while testing ingestion.
+  # Protected with basic auth (you can change the username/password
+  # below).
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: search-engine-mongo-express
+    restart: unless-stopped
+    environment:
+      - ME_CONFIG_MONGODB_URL=mongodb://mongo:27017/
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+      - ME_CONFIG_MONGODB_ENABLE_ADMIN=true
+    ports:
+      - "8081:8081"
+    networks: [search-engine-net]
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: search-engine-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m" # 512MB is more than enough at this project's scale
+      # Elasticvue calls ES's HTTP API directly FROM THE BROWSER (it has
+      # no backend of its own — it's a pure client-side SPA) — so we need
+      # to enable CORS, otherwise the browser blocks the request.
+      - http.cors.enabled=true
+      # CAUTION: if "*" (the wildcard) is given unquoted, when ES writes
+      # it into its own internal overrides.yml, the resulting YAML's
+      # leading "*" gets mistaken for an "alias" (a reference) and causes
+      # a parse error (a known ES-in-Docker issue). Also, allowing every
+      # origin with "*" is an unnecessarily broad CORS policy anyway —
+      # elasticvue always runs from a fixed address in the browser
+      # (http://localhost:8082), so we name that origin directly instead
+      # of a wildcard; this both avoids the YAML parse issue and keeps
+      # CORS from being opened more than necessary.
+      - http.cors.allow-origin=http://localhost:8082
+      - http.cors.allow-headers=X-Requested-With,Content-Type,Content-Length,Authorization
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks: [search-engine-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  # elasticvue: a lightweight web UI for viewing Elasticsearch's
+  # index/document data from the browser (the ES counterpart of
+  # mongo-express). Unlike Kibana, it has no backend/JVM of its own — a
+  # pure static SPA that connects to ES directly from the browser.
+  elasticvue:
+    image: cars10/elasticvue:1.16.0
+    container_name: search-engine-elasticvue
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    networks: [search-engine-net]
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------
+  # 2) APPLICATION — does not start until Mongo and Elasticsearch are "healthy"
+  # ---------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: search-engine-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # The prod default is 10 minutes (see internal/config/config.go).
+      # Lowering it to 5 seconds is ONLY for demo/testing purposes: so
+      # that when you manually trigger the circuit breaker's state
+      # transitions (closed->open->half-open->closed) with "docker
+      # compose stop/start json-provider-a", you can observe them in
+      # Grafana within a reasonable time. Think of it together with
+      # MaxRequests=3 in resilient.go: when you stop and then restart the
+      # provider, it keeps the HALF-OPEN state (yellow) VISIBLE for at
+      # least 3 ingestion rounds (~15s) — it doesn't close instantly and
+      # go unnoticed. Remove this line / set it back to 10m for a real
+      # deployment.
+      - INGEST_INTERVAL_SECONDS=5
+    ports:
+      - "8080:8080"
+    networks: [search-engine-net]
+    depends_on:
+      mongo:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/metrics"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------
+  # Our own designed/run JSON provider — serves a blend of the real JSON
+  # (provider1) and XML (provider2) providers' schemas/concepts, with a
+  # much larger dataset. app doesn't depend on it (ingestion runs
+  # periodically/on demand), but it's logically correct for it to start
+  # in the same tier as the databases: we want it ready by the time app
+  # comes up and "/refresh" gets triggered.
+  # ---------------------------------------------------------------------
+  json-provider-a:
+    build:
+      context: ./mocks/json-provider-a
+      dockerfile: Dockerfile
+    container_name: search-engine-json-provider-own
+    restart: unless-stopped
+    environment:
+      - PORT=4001
+      - DATASET_SIZE=20000
+      - SEED=42
+      # Automatic scheduled outages (TOGGLE_INTERVAL_SECONDS) were
+      # DELIBERATELY removed — circuit breaker/reconcile testing is now
+      # done manually with "docker compose stop/start json-provider-a",
+      # which is more predictable and can be triggered on demand. Enable
+      # these if you want random (unpredictable) failure/latency
+      # simulation:
+      # - FAILURE_RATE=0.2
+      # - LATENCY_MS_MAX=800
+    ports:
+      - "4001:4001"
+    networks: [search-engine-net]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------------
+  # 3) OBSERVABILITY TOOLS — start after app is "healthy"
+  # ---------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: search-engine-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deployments/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [search-engine-net]
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # Alertmanager: the service that takes Prometheus's "this rule is
+  # currently active/firing" signal, groups and deduplicates it, and (in
+  # production) forwards it to a real channel (Slack/email). This project
+  # DELIBERATELY has no notification channel (see the "null receiver"
+  # comment in alertmanager.yml) — the point is to show how alerting is
+  # split between Prometheus (rule EVALUATION) and Alertmanager
+  # (notification MANAGEMENT).
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: search-engine-alertmanager
+    restart: unless-stopped
+    volumes:
+      - ./deployments/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    networks: [search-engine-net]
+
+  loki:
+    image: grafana/loki:3.1.0
+    container_name: search-engine-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./deployments/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    networks: [search-engine-net]
+    depends_on:
+      app:
+        condition: service_healthy
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    container_name: search-engine-promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./deployments/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [search-engine-net]
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: search-engine-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./deployments/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks: [search-engine-net]
+    depends_on:
+      - prometheus
+      - loki
+
+  # ---------------------------------------------------------------------
+  # 4) DASHBOARD (frontend) — starts after app is healthy; since nginx
+  #    bakes VITE_API_URL into the static files at build time, it doesn't
+  #    depend on app at runtime, but we keep the logical ordering anyway.
+  # ---------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8080
+    container_name: search-engine-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    networks: [search-engine-net]
+    depends_on:
+      app:
+        condition: service_healthy

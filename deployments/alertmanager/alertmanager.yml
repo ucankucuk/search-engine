@@ -1,0 +1,35 @@
+# Alertmanager configuration. This project has no real notification
+# channel (a Slack webhook, an email server, PagerDuty, etc.) — so we
+# DELIBERATELY define a "null" receiver: alerts are COLLECTED here,
+# grouped, deduplicated, and made VISIBLE in the Alertmanager UI at
+# http://localhost:9093, but they aren't sent to any external channel.
+#
+# In production, the only thing that would change is the `receivers`
+# block — for example:
+#
+#   receivers:
+#     - name: "default"
+#       slack_configs:
+#         - api_url: "https://hooks.slack.com/services/..."
+#           channel: "#search-engine-alerts"
+#
+# `route`/`group_by`/`rules.yml` (the Prometheus side) would never
+# change — "under what condition an alert is raised" and "where a
+# raised alert goes" are deliberately kept as two separate
+# responsibilities.
+route:
+  receiver: "default"
+  group_by: ["alertname", "provider"]
+  # group_wait: if several alerts fire at the same time (e.g. both
+  # ProviderCircuitBreakerOpen and HighProviderFailureRate for the same
+  # provider), Alertmanager waits a short while to merge them into a
+  # SINGLE notification, instead of spamming one for each.
+  group_wait: 15s
+  group_interval: 1m
+  # repeat_interval: so the same notification isn't sent over and over
+  # while an alert is still active — one notification is enough until
+  # the issue is resolved (or 3 hours pass).
+  repeat_interval: 3h
+
+receivers:
+  - name: "default"

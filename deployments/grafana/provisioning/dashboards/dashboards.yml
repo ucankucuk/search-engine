@@ -1,0 +1,14 @@
+# This file makes the JSON dashboard definitions dropped into the
+# dashboards/ folder load automatically on Grafana startup (no need to
+# import them by hand).
+apiVersion: 1
+
+providers:
+  - name: "search-engine-dashboards"
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards

@@ -1,0 +1,233 @@
+{
+  "id": null,
+  "uid": "provider-health",
+  "title": "Provider Health",
+  "description": "Shows each provider's circuit breaker state (the provider_circuit_state metric) in color: 0=Closed/Healthy (green), 1=Half-Open/Trial phase (yellow), 2=Open/Disabled (red). Also shows request rate/status and response times.",
+  "schemaVersion": 39,
+  "version": 2,
+  "editable": true,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "timezone": "browser",
+  "tags": ["search-engine", "provider-health"],
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Color key** — 🟢 Closed (healthy) · 🟡 Half-Open (trying) · 🔴 Open (disabled, not being called)"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Current Status",
+      "description": "Each provider's MOST RECENT circuit breaker state.",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 3 },
+      "targets": [
+        {
+          "expr": "provider_circuit_state",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 2 }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "Closed" },
+                "1": { "text": "Half-Open" },
+                "2": { "text": "Open" }
+              }
+            }
+          ],
+          "min": 0,
+          "max": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 3,
+      "type": "state-timeline",
+      "title": "State Changes Over Time",
+      "description": "Shows when the circuit breaker opened and closed over time — you can force a provider down (FAILURE_RATE) and watch it turn red here live, then transition back to green through yellow (half-open).",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "expr": "provider_circuit_state",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 2 }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "Closed" },
+                "1": { "text": "Half-Open" },
+                "2": { "text": "Open" }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "rowHeight": 0.8,
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Request Rate (Success / Failure)",
+      "description": "From the provider_requests_total counter: how many requests per second, broken down by provider and outcome (success/failure). A sudden red spike = the moment that provider started failing — usually followed by the circuit breaker opening (see the panel above).",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "targets": [
+        {
+          "expr": "sum(rate(provider_requests_total[1m])) by (provider, status)",
+          "legendFormat": "{{provider}} · {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*success.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": ".*failure.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Response Time — Per Provider (p50 / p95)",
+      "description": "From the provider_request_duration_seconds histogram: the total time a single Fetch call to a provider takes (INCLUDING retry+backoff). p50 = a typical request, p95 = most requests, even in the worst case (including ones that hit a timeout/retry), stay under this.",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(provider_request_duration_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "{{provider}} · p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(provider_request_duration_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "{{provider}} · p95",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*p95.*" },
+            "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "/search End-to-End Latency (p95)",
+      "description": "From the search_request_duration_seconds histogram: the TOTAL time a user's search request takes (Elasticsearch query + scoring + ranking + pagination).",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 34 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(search_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "red", "value": 1.5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value"
+      }
+    }
+  ]
+}
